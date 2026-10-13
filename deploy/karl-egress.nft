@@ -1,0 +1,23 @@
+#!/usr/sbin/nft -f
+# Egress for uid karl: DNS to the router, HTTPS and IMAPS to public hosts, nothing private.
+# Same shape as the Hermes table: one kernel table, no daemon. Replace KARL_UID and ROUTER.
+# Load: nft -f /etc/nftables.d/karl-egress.nft   (or a hermes-egress style service)
+
+define KARL_UID = 999
+define ROUTER   = 192.168.20.1
+define PRIVATE  = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 }
+
+table inet karl_egress {
+  chain output {
+    type filter hook output priority 0; policy accept;
+    meta skuid != $KARL_UID accept
+    oif lo accept
+    ct state established,related accept
+    ip daddr $ROUTER udp dport 53 accept
+    ip daddr $ROUTER tcp dport 53 accept
+    ip daddr $PRIVATE log prefix "karl-egress drop " drop
+    ip6 daddr { fc00::/7, fe80::/10, ::1 } log prefix "karl-egress drop6 " drop
+    tcp dport { 443, 993 } accept
+    log prefix "karl-egress drop " drop
+  }
+}

@@ -1,0 +1,5 @@
+---
+- name: restart karld
+  systemd: { name: karld, state: restarted, daemon_reload: yes }
+- name: reload karl egress
+  shell: nft -f /etc/nftables.d/karl-egress.nft

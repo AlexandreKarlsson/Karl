@@ -1,0 +1,15 @@
+[package]
+name = "karl"
+description = "Karl CLI: a thin client for karld over a unix socket. Mounted into the agent sandbox."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "karl"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+serde.workspace = true
+anyhow.workspace = true

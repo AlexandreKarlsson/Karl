@@ -1,0 +1,50 @@
+# Role karl: daemon user, binaries, config, secrets, egress, unit. Drop into the
+# setup repo next to the hermes role. Variables: see defaults in group_vars (karl_*).
+---
+- name: karl group and user
+  block:
+    - group: { name: karl, system: yes }
+    - group: { name: karl-cli, system: yes }
+    - user:
+        name: karl
+        system: yes
+        group: karl
+        groups: [karl-cli]
+        shell: /usr/sbin/nologin
+        home: /var/lib/karl
+        create_home: no
+    - user: { name: "{{ hermes_user }}", groups: [karl-cli], append: yes }
+
+- name: directories
+  file: { path: "{{ item.p }}", state: directory, owner: karl, group: "{{ item.g | default('karl') }}", mode: "{{ item.m }}" }
+  loop:
+    - { p: /opt/karl/bin, g: root, m: "0755" }
+    - { p: /etc/karl, g: karl, m: "0750" }
+    - { p: /var/lib/karl, m: "0700" }
+    - { p: /var/log/karl, m: "0700" }
+
+- name: binaries (built on the laptop: karld gnu, karl musl)
+  copy: { src: "{{ item.s }}", dest: "/opt/karl/bin/{{ item.d }}", owner: root, group: root, mode: "0755" }
+  loop:
+    - { s: "{{ karl_build_dir }}/release/karld", d: karld }
+    - { s: "{{ karl_build_dir }}/x86_64-unknown-linux-musl/release/karl", d: karl }
+  notify: restart karld
+
+- name: config
+  template: { src: karl.toml.j2, dest: /etc/karl/karl.toml, owner: root, group: karl, mode: "0640" }
+  notify: restart karld
+
+- name: secrets (vault)
+  template: { src: secrets.toml.j2, dest: /var/lib/karl/secrets.toml, owner: karl, group: karl, mode: "0600" }
+  notify: restart karld
+
+- name: egress table
+  template: { src: karl-egress.nft.j2, dest: /etc/nftables.d/karl-egress.nft, mode: "0644" }
+  notify: reload karl egress
+
+- name: unit
+  copy: { src: karld.service, dest: /etc/systemd/system/karld.service, mode: "0644" }
+  notify: restart karld
+
+- name: enable
+  systemd: { name: karld, enabled: yes, state: started, daemon_reload: yes }

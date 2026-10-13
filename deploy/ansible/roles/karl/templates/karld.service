@@ -1,0 +1,52 @@
+# /etc/systemd/system/karld.service — Karl daemon, user `karl`, hardened.
+[Unit]
+Description=Karl: personal data plane for the agent (sync + policy + sockets)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=karl
+Group=karl
+ExecStart=/opt/karl/bin/karld --config /etc/karl/karl.toml run
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+Environment=TZ=Asia/Tokyo
+
+# state and sockets
+StateDirectory=karl
+StateDirectoryMode=0700
+LogsDirectory=karl
+LogsDirectoryMode=0700
+RuntimeDirectory=karl
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=no
+
+# hardening: no root, no caps, read-only system, no other homes, no devices
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallArchitectures=native
+UMask=0077
+ReadOnlyPaths=/etc/karl
+
+[Install]
+WantedBy=multi-user.target

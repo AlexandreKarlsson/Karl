@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Karl launcher. No argument: menu. `scripts/karl <cmd> [args]` runs one.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+IWR_DIR="${IWR_DIR:-$ROOT/../IwannatRust}"          # IwannatRust checkout (codecast player)
+ZENSICAL="${ZENSICAL:-$HOME/.venvs/zensical/bin/zensical}"
+DEV="$ROOT/dev"                                      # local dev config + db + sockets (gitignored)
+KARLD_DEBUG="$ROOT/target/debug/karld"
+KARLD="$ROOT/target/release/karld"
+KARL_MUSL="$ROOT/target/x86_64-unknown-linux-musl/release/karl"
+KARL_DEBUG="$ROOT/target/debug/karl"
+
+commands() {
+cat <<'MENU'
+  🔨  build          Release binaries: karld (glibc) + karl (static musl, for the sandbox)
+  🧪  test           cargo test + clippy -D warnings + fmt --check
+  📚  docs           Serve the docs site (zensical) on http://127.0.0.1:8000
+  📦  docs-build     Build the docs site into site/
+  🎙️  codecast       Play the codecast in IwannatRust (needs ../IwannatRust built)
+  ✅  codecast-check Validate every codecast ref against the code
+  🗣️  codecast-speak Print the codecast as it will be spoken
+  📝  brief          IwannatRust brief of this code (+ writing guide), for rewriting the codecast
+  🧰  dev-init       Create dev/karl.toml + dev/secrets.toml (0600) for a local daemon
+  ⚙️  dev-check      karld check against dev/
+  🔄  dev-sync       One sync pass against dev/
+  🚀  dev-run        Run karld in the foreground against dev/ (ctrl-c stops)
+  ⌨️  cli [args]     Run the karl CLI against the dev daemon  (e.g. scripts/karl cli jira mine)
+  🛠️  admin [args]   Admin verbs on the dev daemon: status | sync [source] | purge | approvals | approve N | deny N
+  📜  audit          Tail dev/audit.log
+  🧹  clean          Remove build outputs and site/
+MENU
+}
+
+usage() { echo "Karl — personal data plane for an AI agent"; echo; commands; echo; echo "usage: scripts/karl <command> [args]"; }
+
+pick() {
+  usage
+  [ -t 0 ] || exit 0
+  echo
+  read -r -p "command (or enter to quit): " choice rest || exit 0
+  [ -n "${choice:-}" ] || exit 0
+  # shellcheck disable=SC2086
+  exec "$0" "$choice" $rest
+}
+
+need() { command -v "$1" >/dev/null || { echo "missing: $1 ($2)" >&2; exit 1; }; }
+need_iwr() {
+  IWR="$IWR_DIR/target/release/iwr"; [ -x "$IWR" ] || IWR="$IWR_DIR/target/debug/iwr"
+  [ -x "$IWR" ] || { echo "iwr not found under $IWR_DIR (set IWR_DIR, or build it: scripts/iwr build there)" >&2; exit 1; }
+}
+need_zensical() { [ -x "$ZENSICAL" ] || command -v zensical >/dev/null && ZENSICAL="$(command -v zensical || echo "$ZENSICAL")"; [ -x "$ZENSICAL" ] || { echo "zensical missing: python3 -m venv ~/.venvs/zensical && ~/.venvs/zensical/bin/pip install zensical" >&2; exit 1; }; }
+need_dev() { [ -f "$DEV/karl.toml" ] || { echo "no dev config → scripts/karl dev-init" >&2; exit 1; }; }
+karld_bin() { if [ -x "$KARLD" ] && [ "$KARLD" -nt "$KARLD_DEBUG" ]; then echo "$KARLD"; elif [ -x "$KARLD_DEBUG" ]; then echo "$KARLD_DEBUG"; else cargo build -p karld >&2; echo "$KARLD_DEBUG"; fi; }
+karl_bin()  { if [ -x "$KARL_MUSL" ]; then echo "$KARL_MUSL"; elif [ -x "$KARL_DEBUG" ]; then echo "$KARL_DEBUG"; else cargo build -p karl >&2; echo "$KARL_DEBUG"; fi; }
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  "") pick ;;
+  build)
+    need cargo "rustup.rs"
+    rustup target list --installed | grep -q x86_64-unknown-linux-musl || rustup target add x86_64-unknown-linux-musl
+    cargo build --release -p karld
+    cargo build --release -p karl --target x86_64-unknown-linux-musl
+    ls -la "$KARLD" "$KARL_MUSL" ;;
+  test)
+    cargo test --workspace
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo fmt --all -- --check
+    echo "✔ tests + clippy + fmt" ;;
+  docs)       need_zensical; exec "$ZENSICAL" serve "$@" ;;
+  docs-build) need_zensical; "$ZENSICAL" build "$@"; echo "✔ site/" ;;
+  codecast)   need_iwr; exec "$IWR" serve "$ROOT" --script "$ROOT/codecast" "$@" ;;
+  codecast-check) need_iwr; exec "$IWR" check "$ROOT/codecast" --path "$ROOT" ;;
+  codecast-speak) need_iwr; exec "$IWR" speak "$ROOT/codecast" ;;
+  brief)      need_iwr; exec "$IWR" brief "$ROOT" --guide "$@" ;;
+  dev-init)
+    mkdir -p "$DEV"; chmod 700 "$DEV"
+    if [ -f "$DEV/karl.toml" ]; then echo "exists: $DEV/karl.toml"; else
+      "$(karld_bin)" example-config \
+        | sed -e "s#/var/lib/karl/karl.db#$DEV/karl.db#" -e "s#/var/log/karl/audit.log#$DEV/audit.log#" \
+              -e "s#/var/lib/karl/secrets.toml#$DEV/secrets.toml#" -e "s#/run/karl/admin.sock#$DEV/admin.sock#" \
+              -e "s#/run/karl/alex.sock#$DEV/alex.sock#" -e "s#uids      = \[\"hermes\"\]#uids      = [\"$USER\"]#" \
+              -e '/^socket_group/d' > "$DEV/karl.toml"
+      echo "wrote $DEV/karl.toml (edit: sources, site, account)"
+    fi
+    if [ -f "$DEV/secrets.toml" ]; then echo "exists: $DEV/secrets.toml"; else
+      ( umask 077; cat > "$DEV/secrets.toml" <<'S'
+# one table per `secret = "…"` in karl.toml. Mode must stay 0600.
+[atl-alex]
+email = ""
+token = ""
+
+[google-alex]
+client_id = ""
+client_secret = ""
+# refresh_token is written by: scripts/karl dev-auth google-alex
+S
+      ); chmod 600 "$DEV/secrets.toml"; echo "wrote $DEV/secrets.toml (fill it in)"
+    fi ;;
+  dev-check)  need_dev; exec "$(karld_bin)" --config "$DEV/karl.toml" check ;;
+  dev-sync)   need_dev; exec "$(karld_bin)" --config "$DEV/karl.toml" sync "$@" ;;
+  dev-run)    need_dev; RUST_LOG="${RUST_LOG:-info}" exec "$(karld_bin)" --config "$DEV/karl.toml" run ;;
+  dev-auth)   need_dev; exec "$(karld_bin)" --config "$DEV/karl.toml" auth "$@" ;;
+  cli)        need_dev; KARL_SOCK="$DEV/alex.sock" exec "$(karl_bin)" "$@" ;;
+  admin)      need_dev; KARL_SOCK="$DEV/admin.sock" exec "$(karl_bin)" "$@" ;;
+  audit)      need_dev; exec tail -n 30 -f "$DEV/audit.log" ;;
+  clean)      rm -rf "$ROOT/site"; cargo clean; echo "✔ clean" ;;
+  -h|--help|help) usage ;;
+  *) echo "unknown command: $cmd" >&2; echo; usage >&2; exit 1 ;;
+esac
