@@ -4,9 +4,13 @@
 //! the daemon calls [`Source::sync`] every `every`. Sources never render: they
 //! produce [`karl_core::Item`]s and let the store decide what is new.
 
+pub mod caldav;
 pub mod google;
 pub mod http;
+pub mod ics;
 pub mod jira;
+pub mod matrix;
+pub mod microsoft;
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -89,22 +93,41 @@ impl WriteReq {
     /// One line for the audit log and the approval list.
     pub fn describe(&self) -> String {
         match self {
-            WriteReq::Comment { key, text } => format!(
-                "comment {key}: {}",
-                karl_core::text::truncate_chars(text, 80)
-            ),
-            WriteReq::Move { key, status } => format!("move {key} → {status}"),
+            // one_line: the text comes from the agent; a newline in it must not
+            // forge a second audit line
+            WriteReq::Comment { key, text } => {
+                format!("comment {key}: {}", karl_core::text::one_line(text, 80))
+            }
+            WriteReq::Move { key, status } => {
+                format!("move {key} → {}", karl_core::text::one_line(status, 40))
+            }
         }
     }
 }
 
-/// Build the source for one `[source.<id>]` table.
-pub fn build(id: &str, cfg: &SourceCfg, secrets: &Secrets) -> Result<Box<dyn Source>> {
+/// Build the source for one `[source.<id>]` table. `secrets_path` is where a
+/// source that rotates its own credential (Microsoft) writes it back.
+pub fn build(
+    id: &str,
+    cfg: &SourceCfg,
+    secrets: &Secrets,
+    secrets_path: &std::path::Path,
+) -> Result<Box<dyn Source>> {
     Ok(match cfg.kind.as_str() {
         "jira" => Box::new(jira::Jira::new(id, cfg, secrets)?),
         "gmail" => Box::new(google::gmail::Gmail::new(id, cfg, secrets)?),
         "gcal" => Box::new(google::gcal::Gcal::new(id, cfg, secrets)?),
-        other => bail!("source {id}: unknown kind {other} (jira, gmail, gcal)"),
+        "caldav" => Box::new(caldav::CalDav::new(id, cfg, secrets)?),
+        "teams" => Box::new(microsoft::teams::Teams::new(
+            id,
+            cfg,
+            secrets,
+            secrets_path,
+        )?),
+        "matrix" => Box::new(matrix::Matrix::new(id, cfg, secrets)?),
+        other => {
+            bail!("source {id}: unknown kind {other} (jira, gmail, gcal, caldav, teams, matrix)")
+        }
     })
 }
 

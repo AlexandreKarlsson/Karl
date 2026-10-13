@@ -83,6 +83,33 @@ pub async fn post_json(
     serde_json::from_str(&text).with_context(|| format!("POST {}: not json", redact_url(url)))
 }
 
+/// Any method with an optional text body; returns (status, body text). Non-2xx
+/// is an error, except 207 (WebDAV multistatus) which is a success here.
+pub async fn request_text(
+    c: &reqwest::Client,
+    method: reqwest::Method,
+    url: &str,
+    headers: HeaderMap,
+    body: Option<String>,
+) -> Result<(reqwest::StatusCode, String)> {
+    let m = method.to_string();
+    let mut req = c.request(method, url).headers(headers);
+    if let Some(b) = body {
+        req = req.body(b);
+    }
+    let resp = req
+        .send()
+        .await
+        .with_context(|| format!("{m} {}", redact_url(url)))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() && status.as_u16() != 207 {
+        let snippet: String = text.chars().take(300).collect();
+        bail!("{m} {} → {status}: {snippet}", redact_url(url));
+    }
+    Ok((status, text))
+}
+
 /// POST a form, return JSON (OAuth token endpoint).
 pub async fn post_form_json(
     c: &reqwest::Client,

@@ -19,8 +19,16 @@ pub fn bind(path: &Path, mode: u32, group: Option<&str>) -> Result<UnixListener>
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
-    if path.exists() {
-        std::fs::remove_file(path).with_context(|| format!("remove stale {}", path.display()))?;
+    // A stale socket from the last run, or an empty directory: a container runtime
+    // that bind-mounted the socket path while the daemon was down creates one.
+    if let Ok(m) = std::fs::symlink_metadata(path) {
+        if m.is_dir() {
+            std::fs::remove_dir(path)
+                .with_context(|| format!("remove directory at {}", path.display()))?;
+        } else {
+            std::fs::remove_file(path)
+                .with_context(|| format!("remove stale {}", path.display()))?;
+        }
     }
     let l = UnixListener::bind(path).with_context(|| format!("bind {}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
@@ -35,7 +43,11 @@ pub fn bind(path: &Path, mode: u32, group: Option<&str>) -> Result<UnixListener>
 pub async fn serve_profile(app: Arc<App>, idx: usize) -> Result<()> {
     let p = &app.profiles[idx];
     let path = p.policy.cfg.socket.clone();
-    let listener = bind(&path, 0o660, app.cfg.daemon.socket_group.as_deref())?;
+    let listener = bind(
+        &path,
+        app.cfg.daemon.socket_mode(),
+        app.cfg.daemon.socket_group.as_deref(),
+    )?;
     tracing::info!(profile = %p.policy.name, socket = %path.display(), "listening");
     loop {
         let (stream, _) = listener.accept().await?;

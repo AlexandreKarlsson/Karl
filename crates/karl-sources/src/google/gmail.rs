@@ -4,7 +4,7 @@
 use super::oauth::GoogleAuth;
 use crate::http::get_json;
 use crate::{extra_u64, now, SharedStore, Source, SyncReport};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use base64::Engine;
 use karl_core::model::News;
@@ -159,14 +159,24 @@ impl Source for Gmail {
                 .collect()
         };
         let mut items = Vec::new();
+        let mut failed = 0usize;
         for id in fresh.iter().take(FETCH_PER_PASS) {
-            let v = self
-                .get(&format!("/messages/{id}?format=full"))
-                .await
-                .with_context(|| format!("message {id}"))?;
+            // one message that 404s (deleted meanwhile) or 5xxs must not wedge the
+            // whole source forever: skip it this pass, it is retried next time
+            let v = match self.get(&format!("/messages/{id}?format=full")).await {
+                Ok(v) => v,
+                Err(e) => {
+                    failed += 1;
+                    tracing::warn!(source = %self.id, id = %id, "message fetch failed: {e:#}");
+                    continue;
+                }
+            };
             if let Some(it) = self.message_to_item(&v, &labels) {
                 items.push(it);
             }
+        }
+        if failed > 0 && items.is_empty() {
+            anyhow::bail!("gmail: every message fetch failed this pass ({failed})");
         }
         // oldest first so seq order follows time
         items.sort_by_key(|i| i.ts);

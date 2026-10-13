@@ -13,13 +13,15 @@ RestartSec=5
 Environment=RUST_LOG=info
 Environment=TZ=Asia/Tokyo
 
-# state and sockets
+# state and sockets. /run/karl is 0755: a rootless podman sandbox under runc
+# keeps no supplementary groups, so the path must be world-traversable and
+# the sockets 0666 (`socket_mode` in karl.toml); the peer-uid check is the gate.
 StateDirectory=karl
 StateDirectoryMode=0700
 LogsDirectory=karl
 LogsDirectoryMode=0700
 RuntimeDirectory=karl
-RuntimeDirectoryMode=0750
+RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=no
 
 # hardening: no root, no caps, read-only system, no other homes, no devices

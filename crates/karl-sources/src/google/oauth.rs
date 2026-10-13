@@ -1,7 +1,7 @@
 //! OAuth 2 for a "desktop" client: refresh tokens → short-lived access tokens,
 //! a scope check at start, and the one-time loopback flow (`karld auth`).
 
-use crate::http::{client, get_json, post_form_json};
+use crate::http::{client, post_form_json};
 use anyhow::{bail, Context, Result};
 use karl_core::policy::Secrets;
 use reqwest::header::HeaderMap;
@@ -74,13 +74,10 @@ impl GoogleAuth {
     /// Scopes the token actually carries. Used to refuse a token broader than the policy says.
     pub async fn granted_scopes(&self) -> Result<Vec<String>> {
         let tok = self.access_token().await?;
-        let v = get_json(
-            &self.client,
-            &format!("{INFO_URL}?access_token={tok}"),
-            HeaderMap::new(),
-        )
-        .await
-        .context("google: tokeninfo")?;
+        // POST: the token stays out of URLs (proxy and server logs)
+        let v = post_form_json(&self.client, INFO_URL, &[("access_token", tok.as_str())])
+            .await
+            .context("google: tokeninfo")?;
         Ok(v["scope"]
             .as_str()
             .unwrap_or("")
@@ -116,8 +113,11 @@ pub async fn loopback_flow(
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let port = listener.local_addr()?.port();
     let redirect = format!("http://127.0.0.1:{port}");
+    // CSRF guard: anything on the laptop can hit 127.0.0.1:port; only the browser
+    // tab we opened knows this state.
+    let state = random_hex(16)?;
     let url = format!(
-        "{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
+        "{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&state={state}",
         urlencoding::encode(client_id),
         urlencoding::encode(&redirect),
         urlencoding::encode(&scopes.join(" "))
@@ -129,15 +129,24 @@ pub async fn loopback_flow(
     let req = String::from_utf8_lossy(&buf[..n]);
     let line = req.lines().next().unwrap_or("");
     let path = line.split_whitespace().nth(1).unwrap_or("");
-    let code = path
+    let query: Vec<(String, String)> = path
         .split('?')
         .nth(1)
-        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("code=")))
-        .map(|c| {
-            urlencoding::decode(c)
-                .map(|s| s.into_owned())
-                .unwrap_or_default()
-        });
+        .unwrap_or("")
+        .split('&')
+        .filter_map(|kv| {
+            let (k, v) = kv.split_once('=')?;
+            Some((
+                k.to_string(),
+                urlencoding::decode(v).map(|s| s.into_owned()).ok()?,
+            ))
+        })
+        .collect();
+    let get = |k: &str| query.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let code = match get("state") {
+        Some(s) if s == state => get("code"),
+        _ => None,
+    };
     let body = if code.is_some() {
         "karl: authorized, you can close this tab."
     } else {
@@ -148,7 +157,7 @@ pub async fn loopback_flow(
         body.len()
     );
     sock.write_all(resp.as_bytes()).await?;
-    let code = code.context("no code in the callback")?;
+    let code = code.context("no code in the callback (or state mismatch)")?;
     let v = post_form_json(
         &client()?,
         TOKEN_URL,
@@ -166,6 +175,14 @@ pub async fn loopback_flow(
         .as_str()
         .map(String::from)
         .context("no refresh_token in reply (revoke the app in your Google account and retry)")
+}
+
+/// `n` random bytes as hex, from the kernel.
+pub fn random_hex(n: usize) -> Result<String> {
+    use std::io::Read;
+    let mut buf = vec![0u8; n];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// RFC3339 → unix seconds.

@@ -32,7 +32,7 @@ flowchart LR
 | --- | --- | --- |
 | Sandbox, where the model's commands run | nothing | the socket, nothing else (`--network=none`) |
 | Hermes gateway (uid `hermes`) | Discord token, search key | Discord, ai1, any tcp/443, as today |
-| `karld` (uid `karl`) | Google and Jira tokens, the cache | tcp/443 and 993 to public hosts only; every private range dropped |
+| `karld` (uid `karl`) | Google, Jira, Yahoo, Microsoft, Matrix credentials and the cache | tcp/443 and 993 to public hosts only, plus listed LAN hosts (a homeserver); every other private address dropped |
 | root on the host | everything | everything |
 
 ## What stops what
@@ -42,7 +42,7 @@ flowchart LR
 | Model is tricked into reading secrets (`cat ~/.config/…`) | the sandbox has no secrets and no home mount. Unchanged from the Hermes setup |
 | Model sends something clever through the socket | the socket speaks only the verbs in the command table. No SQL, no paths, no shell. A request over 4 KiB is dropped unread |
 | Model tries a write | three layers. The profile's mode on that source, `not-authorized` by default, refuses it before any lookup. `authorization-required` queues it for a human on the admin socket. The source's write path accepts two verbs and, for Jira, only `/rest/api/3/issue/…` paths; Google tokens carry read-only scopes, checked at start, so Gmail and Calendar cannot write at all |
-| Another local user connects to the socket | socket is `karl:karl-cli` 0660 and the daemon checks `SO_PEERCRED` against the profile's uid list |
+| Another local user connects to the socket | the daemon checks `SO_PEERCRED` against the profile's uid list on every connection and logs the refusal. The file mode (0660 with a group, or 0666 where the sandbox cannot keep groups) is only a second layer |
 | A profile reads another person's sources | each profile has its own socket path; the daemon maps path → profile → allowed sources. Asami's socket never answers for Alex's mail |
 | Model dumps the whole mailbox | `max_lines`, `max_bytes` per reply and `rate` per hour. A dump takes many calls and shows in the audit log |
 | OTP codes or card numbers leak into the model's context | `hide` drops the senders, `redact` scrubs the patterns before the text leaves the daemon |

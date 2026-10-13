@@ -27,11 +27,25 @@ pub struct DaemonCfg {
     pub secrets: PathBuf,
     #[serde(default = "d_retention")]
     pub retention_days: u32,
-    /// Group that owns the profile sockets (0660). The daemon user must be a member.
+    /// Group that owns the profile sockets. The daemon user must be a member.
     #[serde(default)]
     pub socket_group: Option<String>,
+    /// Mode of the profile sockets, octal string. Default `"0660"`. `"0666"` when the
+    /// client runs where supplementary groups are not kept (a rootless container with
+    /// runc): the peer-uid check in the daemon is the gate; the mode is only a second one.
+    #[serde(default)]
+    pub socket_mode: Option<String>,
     #[serde(default = "d_admin_socket")]
     pub admin_socket: PathBuf,
+}
+
+impl DaemonCfg {
+    pub fn socket_mode(&self) -> u32 {
+        self.socket_mode
+            .as_deref()
+            .and_then(|m| u32::from_str_radix(m.trim_start_matches("0o"), 8).ok())
+            .unwrap_or(0o660)
+    }
 }
 
 fn d_retention() -> u32 {
@@ -459,6 +473,33 @@ impl Secrets {
             .map(String::as_str)
             .with_context(|| format!("secrets: missing [{table}] {key}"))
     }
+
+    /// Set one key in the secrets file on disk, keeping everything else. The
+    /// temp file is 0600 from its first byte and renamed into place.
+    pub fn set_key(path: &Path, table: &str, key: &str, value: &str) -> Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let text = std::fs::read_to_string(path)?;
+        let mut doc: toml::Table = toml::from_str(&text)?;
+        let t = doc
+            .entry(table)
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let t = t.as_table_mut().context("secret table")?;
+        t.insert(key.to_string(), toml::Value::String(value.to_string()));
+        let tmp = path.with_extension("tmp");
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(toml::to_string(&doc)?.as_bytes())?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
 }
 
 pub const EXAMPLE: &str = r#"[daemon]
@@ -492,6 +533,33 @@ every    = "10m"
 scopes   = ["https://www.googleapis.com/auth/calendar.readonly"]
 calendar = "primary"
 days_ahead = 14
+
+# Yahoo! JAPAN カレンダー, or any CalDAV server. secret: `user` + `password` (an app password).
+# A public `.ics` url works too (`url = "https://…/basic.ics"`, no secret needed).
+# [source.ycal]
+# kind = "caldav"
+# url  = "https://caldav.yahoo.co.jp/dav/<yahoo-id>/Calendar/<calendar-id>/"
+# secret = "yahoo-alex"
+# every = "10m"
+# days_ahead = 14
+
+# Microsoft Teams chats (Graph, delegated Chat.Read). secret: `client_id`, `tenant`, `refresh_token`
+# (from `karld auth-ms teams-alex`). Channel messages need admin consent and are not read.
+# [source.teams]
+# kind = "teams"
+# secret = "teams-alex"
+# every = "5m"
+# window_days = 14
+
+# WhatsApp / Messenger / Instagram through a mautrix bridge on your Matrix homeserver.
+# One source per network: `protocol` matches the bridge's `m.bridge` state (whatsapp, facebook, instagram).
+# secret: `access_token`, `user_id` of a Matrix account that is in the bridged rooms.
+# [source.wa]
+# kind = "matrix"
+# homeserver = "https://matrix.example.net"
+# protocol = "whatsapp"
+# secret = "matrix-alex"
+# every = "2m"
 
 [profile.alex]
 socket    = "/run/karl/alex.sock"

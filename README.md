@@ -2,8 +2,8 @@
 
 **A personal data plane for an AI agent.** Rust. Read-only. Token-minimal.
 
-Karl syncs your mail, calendar and Jira into one local SQLite cache and
-answers an agent through a unix socket, one line per item:
+Karl syncs your mail, calendars, Jira and chats into one local SQLite cache
+and answers an agent through a unix socket, one line per item:
 
 ```text
 $ karl news
@@ -65,7 +65,7 @@ scripts/karl brief             # the brief + writing guide, to rewrite parts
 
 ```text
 crates/karl-core      Item, Store (SQLite + FTS5), policy, renderer, command table, protocol
-crates/karl-sources   jira, gmail, gcal
+crates/karl-sources   jira, gmail, gcal, caldav (Yahoo! JAPAN, any CalDAV, .ics), teams (Graph), matrix (mautrix bridges)
 crates/karld          the daemon
 crates/karl           the client
 deploy/               systemd unit, nftables egress, ansible role skeleton, Hermes sandbox notes
@@ -78,9 +78,12 @@ scripts/karl          launcher: build, test, docs, codecast, dev daemon
 
 Jira works against a real site (sync, `mine`, `news`, `show`, live `q` and
 `comments`; writes `comment` and `move` with the three authorization levels
-and the approval queue). Gmail and Calendar are written against the official
-APIs and need an OAuth client to exercise. No chat sources yet: LINE, WhatsApp
-and Messenger have no official personal API; adding one is one file (see
-docs, Sources). No UI.
+and the approval queue). Gmail, Google Calendar, CalDAV (Yahoo! JAPAN
+カレンダー), Teams chats (Microsoft Graph, `Chat.Read`) and Matrix are written
+against the official APIs and need credentials to exercise. WhatsApp,
+Messenger and Instagram have no personal API: they arrive through a mautrix
+bridge on your own Matrix homeserver, and the `matrix` source reads the
+bridged rooms (one source per network, `protocol = "whatsapp"`). LINE has no
+route at all. Deployed by the `karl` role of the setup repo. No UI.
 
 MIT.

@@ -6,6 +6,7 @@
 //! karld [--config …] check                        validate config, secrets, credentials, scopes
 //! karld [--config …] sync [source]                one sync pass, then exit
 //! karld [--config …] auth <secret> [--port N] [--scopes a,b]   Google loopback OAuth, writes refresh_token
+//! karld [--config …] auth-ms <secret> [--scopes a,b]           Microsoft device-code OAuth, writes refresh_token
 //! karld example-config                            print a karl.toml to start from
 //! ```
 
@@ -46,6 +47,7 @@ async fn main() -> Result<()> {
         "check" => check(&config).await,
         "sync" => sync_once(&config, args.get(1).map(String::as_str)).await,
         "auth" => auth(&config, &args[1..]).await,
+        "auth-ms" => auth_ms(&config, &args[1..]).await,
         "example-config" => {
             print!("{EXAMPLE}");
             Ok(())
@@ -54,7 +56,7 @@ async fn main() -> Result<()> {
             println!("karld {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        other => bail!("unknown command {other} (run, check, sync, auth, example-config)"),
+        other => bail!("unknown command {other} (run, check, sync, auth, auth-ms, example-config)"),
     }
 }
 
@@ -193,7 +195,7 @@ async fn auth(config: &Path, args: &[String]) -> Result<()> {
     let refresh =
         karl_sources::google::oauth::loopback_flow(&client_id, &client_secret, &scopes, port)
             .await?;
-    write_secret(&cfg.daemon.secrets, name, "refresh_token", &refresh)?;
+    karl_core::policy::Secrets::set_key(&cfg.daemon.secrets, name, "refresh_token", &refresh)?;
     println!(
         "refresh_token written to [{name}] in {}. Restart karld.",
         cfg.daemon.secrets.display()
@@ -201,19 +203,41 @@ async fn auth(config: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Set one key in the secrets file, keeping everything else and mode 0600.
-fn write_secret(path: &std::path::Path, table: &str, key: &str, value: &str) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let text = std::fs::read_to_string(path)?;
-    let mut doc: toml::Table = toml::from_str(&text)?;
-    let t = doc
-        .entry(table)
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    let t = t.as_table_mut().context("secret table")?;
-    t.insert(key.to_string(), toml::Value::String(value.to_string()));
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, toml::to_string(&doc)?)?;
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    std::fs::rename(&tmp, path)?;
+/// Microsoft: device code, no port, works over ssh. `[secret]` needs `client_id`
+/// (an app registration with "allow public client flows") and optionally `tenant`.
+async fn auth_ms(config: &Path, args: &[String]) -> Result<()> {
+    let name = args
+        .first()
+        .context("usage: karld auth-ms <secret-name> [--scopes a,b]")?;
+    let mut scopes = karl_sources::microsoft::teams::default_scopes();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--scopes" => {
+                scopes = args
+                    .get(i + 1)
+                    .context("--scopes a,b")?
+                    .split(',')
+                    .map(String::from)
+                    .collect();
+                i += 2;
+            }
+            other => bail!("unknown flag {other}"),
+        }
+    }
+    let cfg = Config::load(config)?;
+    let secrets = karl_core::policy::Secrets::load(&cfg.daemon.secrets)?;
+    let client_id = secrets.get(name, "client_id")?.to_string();
+    let tenant = secrets
+        .get(name, "tenant")
+        .unwrap_or("organizations")
+        .to_string();
+    let refresh =
+        karl_sources::microsoft::oauth::device_code_flow(&client_id, &tenant, &scopes).await?;
+    karl_core::policy::Secrets::set_key(&cfg.daemon.secrets, name, "refresh_token", &refresh)?;
+    println!(
+        "refresh_token written to [{name}] in {}. Restart karld.",
+        cfg.daemon.secrets.display()
+    );
     Ok(())
 }

@@ -28,11 +28,17 @@ pub async fn serve(app: Arc<App>) -> Result<()> {
         tokio::spawn(async move {
             let (rd, mut wr) = stream.split();
             let mut line = Vec::new();
-            if BufReader::new(rd.take(MAX_REQUEST as u64))
+            if BufReader::new(rd.take(MAX_REQUEST as u64 + 1))
                 .read_until(b'\n', &mut line)
                 .await
                 .is_err()
             {
+                return;
+            }
+            if line.len() > MAX_REQUEST {
+                let _ = wr
+                    .write_all(&Reply::usage("request too long").encode())
+                    .await;
                 return;
             }
             let reply = match proto::decode_request(line.strip_suffix(b"\n").unwrap_or(&line)) {

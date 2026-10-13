@@ -49,7 +49,12 @@ impl App {
         for (id, scfg) in &cfg.source {
             sources.insert(
                 id.clone(),
-                Arc::from(karl_sources::build(id, scfg, &secrets)?),
+                Arc::from(karl_sources::build(
+                    id,
+                    scfg,
+                    &secrets,
+                    &cfg.daemon.secrets,
+                )?),
             );
             kick.insert(id.clone(), Arc::new(Notify::new()));
         }

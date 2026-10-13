@@ -26,6 +26,8 @@ cat <<'MENU'
   🧰  dev-init       Create dev/karl.toml + dev/secrets.toml (0600) for a local daemon
   ⚙️  dev-check      karld check against dev/
   🔄  dev-sync       One sync pass against dev/
+  🔑  dev-auth NAME  Google loopback OAuth for secret table NAME → refresh_token into dev/secrets.toml
+  🔑  dev-auth-ms NAME  Microsoft device-code OAuth (Teams) for secret table NAME
   🚀  dev-run        Run karld in the foreground against dev/ (ctrl-c stops)
   ⌨️  cli [args]     Run the karl CLI against the dev daemon  (e.g. scripts/karl cli jira mine)
   🛠️  admin [args]   Admin verbs on the dev daemon: status | sync [source] | purge | approvals | approve N | deny N
@@ -104,6 +106,7 @@ S
   dev-sync)   need_dev; exec "$(karld_bin)" --config "$DEV/karl.toml" sync "$@" ;;
   dev-run)    need_dev; RUST_LOG="${RUST_LOG:-info}" exec "$(karld_bin)" --config "$DEV/karl.toml" run ;;
   dev-auth)   need_dev; exec "$(karld_bin)" --config "$DEV/karl.toml" auth "$@" ;;
+  dev-auth-ms) need_dev; exec "$(karld_bin)" --config "$DEV/karl.toml" auth-ms "$@" ;;
   cli)        need_dev; KARL_SOCK="$DEV/alex.sock" exec "$(karl_bin)" "$@" ;;
   admin)      need_dev; KARL_SOCK="$DEV/admin.sock" exec "$(karl_bin)" "$@" ;;
   audit)      need_dev; exec tail -n 30 -f "$DEV/audit.log" ;;

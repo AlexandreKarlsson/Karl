@@ -17,7 +17,7 @@ flowchart TB
     sec["/var/lib/karl/secrets.toml 0600 karl"]
     unit["karld.service, user karl"]
     nft["nft table karl_egress"]
-    run["/run/karl/alex.sock 0660 karl:karl-cli"]
+    run["/run/karl/alex.sock 0666 karl (peer uid checked)"]
     hermes["Hermes sandbox: -v karl, -v socket"]
   end
   b1 & b2 --> bin
@@ -41,13 +41,13 @@ has no C dependencies, so no musl toolchain is needed. Result: ~500 KB.
 
 | | |
 | --- | --- |
-| user `karl` | system user, no shell, no sudo, member of group `karl-cli` |
-| group `karl-cli` | `hermes` is a member: that is what lets the sandbox open the socket |
+| user `karl` | system user, no shell, no sudo |
+| sockets | 0666 in `/run/karl` 0755: the rootless sandbox keeps no supplementary groups under runc, so a group bit would not reach it. The daemon's peer-uid check is the gate (`socket_mode` in `[daemon]`) |
 | `/opt/karl/bin/karld`, `karl` | 0755 root |
 | `/etc/karl/karl.toml` | 0640 root:karl |
 | `/var/lib/karl/` | 0700 karl: `karl.db`, `secrets.toml` (0600) |
 | `/var/log/karl/audit.log` | 0600 karl |
-| `/run/karl/` | 0750 karl:karl-cli, created by the unit |
+| `/run/karl/` | 0755 karl, created by the unit |
 
 ## The unit
 
@@ -98,11 +98,14 @@ accepted, and a unix socket is not even that).
 
 ## Ansible
 
-`deploy/ansible/roles/karl/` is a role skeleton for the setup repository:
-users and groups, directories, binaries from the laptop build, config and
-secrets templates from the vault, the egress table, the unit. Variables it
-expects: `karl_build_dir`, `karl_profile`, `karl_uid`, `router_ip`,
-`hermes_user`, and `vault_karl_*`.
+The real role is `minipc/ansible/roles/karl` in the setup repository: user,
+directories, the two binaries from the laptop build (`karl_build_dir`),
+`karl.toml` rendered from `karl_sources` / `karl_profiles`, `secrets.toml`
+from `vault_karl_secrets`, the egress table (`karl_egress_tcp_ports`,
+`karl_egress_lan_allow` for a Matrix homeserver on the LAN) and the unit. The
+Hermes role there adds the two bind mounts to every profile listed in
+`karl_profiles` and the `karl` paragraph to its `SOUL.md`. `deploy/ansible/`
+here is only the shape.
 
 ## Check
 

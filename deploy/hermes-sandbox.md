@@ -24,8 +24,15 @@ socket, so the daemon knows who is asking from the path alone.
 Requirements on the host:
 
 - `karl` is the static musl build (`cargo build --release -p karl --target x86_64-unknown-linux-musl`), copied to `/opt/karl/bin/karl`, mode 0755.
-- user `hermes` is a member of group `karl-cli`; sockets are `karl:karl-cli` 0660.
-- `/run/karl` is 0750 `karl:karl-cli` (the unit's `RuntimeDirectory` plus a `chgrp`), so `hermes` can traverse it.
+- `/run/karl` is 0755 (`RuntimeDirectoryMode=0755` in the unit) and the profile
+  sockets are 0666 (`socket_mode = "0666"` in `[daemon]`). A group bit would not
+  reach the sandbox: rootless podman with **runc** drops the host user's
+  supplementary groups (`--group-add keep-groups` is crun-only). The gate is the
+  daemon's peer-uid check, not the file mode. On crun you can keep 0660 +
+  `socket_group` + `keep-groups` instead.
+- `karld` must be up before a sandbox is created: podman creates a *directory*
+  at a missing bind source. `karld` removes an empty directory at its socket
+  path on start, and the container is recycled after `lifetime_seconds`.
 
 Inside the sandbox, uid 0 is the host's `hermes` uid (rootless podman), so the
 daemon's peer-credential check sees `hermes`, which is the uid listed in the
@@ -37,6 +44,7 @@ arguments (keep both in sync; it is ~80 tokens):
 ```
 Personal data via the `karl` command in the terminal (read-only, pre-digested, one line per item):
   karl news         everything new since last asked; karl jira news = one source
+  karl msg  news | recent 2h | show <who> [n] | find <words>     (chats)
   karl mail news | recent 2h | show <who> [n] | find <words>
   karl cal  today | tomorrow | week | <yyyy-mm-dd>
   karl jira mine | news | show KEY | comments KEY | q <JQL>
